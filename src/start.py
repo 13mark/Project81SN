@@ -1,3 +1,4 @@
+import gc
 import os
 import cv2
 import keras
@@ -10,7 +11,7 @@ import keras.backend as K
 from collections import defaultdict
 from keras.applications.inception_v3 import InceptionV3
 from keras.applications.vgg16 import VGG16
-from keras.layers import Input, Dense, merge, Flatten
+from keras.layers import Input, Dense, dot, Flatten
 from keras.optimizers import Adam
 from keras.models import Model
 
@@ -18,8 +19,13 @@ from keras.models import Model
 
 home = os.path.dirname(os.getcwd())
 
-train_dir = "D://FinalImages//Train_val"
-valid_dir = "D://FinalImages//Valid_val"
+if True:
+    train_dir = os.path.join(home, "data", "Train_val")
+    valid_dir = os.path.join(home, "data", "Valid_val")
+else:
+    train_dir = os.path.join("D://FinalImages", "Train_val")
+    valid_dir = os.path.join("D://FinalImages", "Valid_val")
+
 input_shape = (224, 224, 3)
 
 
@@ -36,7 +42,10 @@ class ModelArchitectures:
         encoded_l = base_model(label_input)
         encoded_r = base_model(prediction_input)
 
-        both = merge([encoded_l, encoded_r], mode=lambda x: K.abs(x[0] - x[1]), output_shape=lambda x: x[0])
+        # both = merge([encoded_l, encoded_r], 
+        #              mode=lambda x: K.abs(x[0] - x[1]), 
+        #              output_shape=lambda x: x[0])
+        both = dot([encoded_l, encoded_r], axes=-1, normalize=True)
         flattened = Flatten()(both)
         prediction = Dense(1, activation='sigmoid')(flattened)
         siamese_net = Model(inputs=[label_input, prediction_input], outputs=prediction)
@@ -82,7 +91,7 @@ class SiameseLoader:
 def load_file(file_name):
     if os.path.exists(file_name):
         image = cv2.imread(file_name)
-        image.resize((224, 224, 3))
+        image.resize(input_shape)
     else:
         print("Error")
     return image
@@ -131,8 +140,8 @@ class DataGenerator(keras.utils.Sequence):
         pass
 
 
-# create_dataset(train_dir, "train")
-# create_dataset(valid_dir, "valid")
+create_dataset(train_dir, "train")
+create_dataset(valid_dir, "valid")
 
 model = ModelArchitectures.get_model()
 

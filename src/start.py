@@ -1,32 +1,39 @@
 import gc
 import os
 import cv2
+import json
 import keras
 import pickle
 import random
+import datetime
 
 import numpy as np 
 import keras.backend as K 
 
-from collections import defaultdict
-from keras.applications.inception_v3 import InceptionV3
+from collections import defaultdict, namedtuple
 from keras.applications.vgg16 import VGG16
-from keras.layers import Input, Dense, dot, Flatten
+from keras.layers import Input, Dense, Flatten, subtract, Lambda
 from keras.optimizers import Adam
 from keras.models import Model
+from keras.callbacks import EarlyStopping, ModelCheckpoint
 
 # TODO: Start prediction Module with ImageNet Weights
 
 home = os.path.dirname(os.getcwd())
+time_at_start = datetime.datetime.now().strftime("%Y-%m-%d--%H-%M-%S")
 
-if True:
-    train_dir = os.path.join(home, "data", "Train_val")
-    valid_dir = os.path.join(home, "data", "Valid_val")
-else:
-    train_dir = os.path.join("D://FinalImages", "Train_val")
-    valid_dir = os.path.join("D://FinalImages", "Valid_val")
+config_file = os.path.join(home, "config", "config_test.json")
 
-input_shape = (224, 224, 3)
+with open(config_file, 'r') as f:
+    config = json.load(f, object_hook=lambda d: namedtuple('X', d.keys())(*d.values()))
+
+
+train_dir = config.train.input_dir
+valid_dir = config.valid.input_dir
+model_dir = os.path.join(home, "models", f"models_{time_at_start}")
+os.makedirs(model_dir, exist_ok=True)
+
+input_shape = config.input_shape
 
 
 class ModelArchitectures:
@@ -36,20 +43,19 @@ class ModelArchitectures:
         prediction_input = Input(input_shape)
 
         base_model = VGG16(include_top=False, weights='imagenet')
-        for layer in base_model.layers:
+        for layer in base_model.layers[:17]:
             layer.trainable = False
         
         encoded_l = base_model(label_input)
         encoded_r = base_model(prediction_input)
 
-        # both = merge([encoded_l, encoded_r], 
-        #              mode=lambda x: K.abs(x[0] - x[1]), 
-        #              output_shape=lambda x: x[0])
-        both = dot([encoded_l, encoded_r], axes=-1, normalize=True)
+        both = subtract([encoded_l, encoded_r])
+        both = Lambda(lambda x: abs(x))(both)
         flattened = Flatten()(both)
         prediction = Dense(1, activation='sigmoid')(flattened)
         siamese_net = Model(inputs=[label_input, prediction_input], outputs=prediction)
-        siamese_net.compile(loss="binary_crossentropy", optimizer=Adam(lr=1e-3))
+        siamese_net.compile(loss="binary_crossentropy", metrics=["accuracy"],
+                            optimizer=Adam(lr=config.learning_rate))
         # print(siamese_net.summary())
         return siamese_net
 
@@ -81,45 +87,46 @@ class SiameseLoader:
         return pairs, targets
 
     def create_batches(self, num_batches, batch_size):
-        for _ in range(8 * num_batches):
+        for _ in range(2 * num_batches):
             self.batches.append(self.get_batch(batch_size))
 
     def yield_batch(self):
         yield random.choice(self.batches)
 
 
-def load_file(file_name):
-    if os.path.exists(file_name):
-        image = cv2.imread(file_name)
-        image.resize(input_shape)
-    else:
-        print("Error")
-    return image
+class Utils:
+	@staticmethod
+	def load_file(file_name):
+	    if os.path.exists(file_name):
+	        image = cv2.imread(file_name)
+	        image.resize(input_shape)
+	    else:
+	        print("Error")
+	    return image
 
+	@staticmethod
+	def create_dataset(input_folder, identifier):
+	    result = defaultdict(dict)
+	    for document_type in os.listdir(input_folder):
+	        print("Loading Document Type: {}".format(document_type))
+	        document_type_path = os.path.join(input_folder, document_type)
+	        for document in os.listdir(document_type_path):
+	            document_path = os.path.join(document_type_path, document)
+	            result[document_type][document] = Utils.load_file(document_path)
 
-def create_dataset(input_folder, identifier):
-    result = defaultdict(dict)
-    for document_type in os.listdir(input_folder):
-        print("Loading Document Type: {}".format(document_type))
-        document_type_path = os.path.join(input_folder, document_type)
-        for document in os.listdir(document_type_path):
-            document_path = os.path.join(document_type_path, document)
-            result[document_type][document] = load_file(document_path)
+	    with open(os.path.join(home, "data", f"{identifier}.pickle"), "wb") as f:
+	        pickle.dump(result, f)
 
-    with open(os.path.join(home, "data", f"{identifier}.pickle"), "wb") as f:
-        pickle.dump(result, f)
-
-
-def load_dataset(identifier):
-    with open(os.path.join(home, "data", f"{identifier}.pickle"), "rb") as f:
-        result = pickle.load(f)
-    return result
+	@staticmethod
+	def load_dataset(identifier):
+	    with open(os.path.join(home, "data", f"{identifier}.pickle"), "rb") as f:
+	        result = pickle.load(f)
+	    return result
 
 
 class DataGenerator(keras.utils.Sequence):
     """Generates data for Keras"""
     def __init__(self, X_train, batch_size=32, num_batches=32, shuffle=True):
-        print("pint why?")
         self.X_train = X_train
         self.batch_size = batch_size
         self.num_batches = num_batches
@@ -140,27 +147,48 @@ class DataGenerator(keras.utils.Sequence):
         pass
 
 
-create_dataset(train_dir, "train")
-create_dataset(valid_dir, "valid")
+# Utils.create_dataset(train_dir, "train")
+# Utils.create_dataset(valid_dir, "valid")
 
 model = ModelArchitectures.get_model()
 
 if True:
-    train_data = load_dataset("train")
-    valid_data = load_dataset("valid")
+    train_data = Utils.load_dataset("train")
+    valid_data = Utils.load_dataset("valid")
 
-    train_generator = DataGenerator(train_data, batch_size=32, num_batches=4)
-    valid_generator = DataGenerator(valid_data, batch_size=256, num_batches=1)
+    train_generator = DataGenerator(train_data, 
+                                    batch_size=config.train.batch_size, 
+                                    num_batches=config.train.num_batches)
+    valid_generator = DataGenerator(valid_data, 
+                                    batch_size=config.valid.batch_size, 
+                                    num_batches=config.valid.num_batches)
 
     del train_data, valid_data
 
     gc.collect(2)
 
-    model.fit_generator(generator=train_generator, validation_data=valid_generator)
+    # model.fit_generator(generator=train_generator, epochs=10)
+    callbacks = [
+        EarlyStopping(patience=config.patience, monitor='val_loss', verbose=1),
+        ModelCheckpoint(os.path.join(model_dir, f"model_{time_at_start}.h5"), 
+                        save_best_only=True, period=1)
+    ]
+    model.fit_generator(generator=train_generator, 
+                        validation_data=valid_generator, 
+                        epochs=config.num_epochs,
+                        callbacks=callbacks)
 
 else:
-    print(model.predict([np.array([load_file(r"D:\\FinalImages\Train\0\imagesa_a_m_m_amm07c00_CTRSP-FILES013353-33.tif")]), 
-                        np.array([load_file(r"D:\\FinalImages\Train\0\imagesa_a_w_d_awd43f00_0001202299.tif")])]))
+    test_label_file = os.path.join(config.valid.input_dir,
+                                   "0", "imagesb_b_f_b_bfb88e00_2026193480.tif") 
+    test_prediction_file_same = os.path.join(config.valid.input_dir,
+                                             "0", "imagesb_b_q_i_bqi55a00_505365510+-5511.tif")
+    test_prediction_file_different = os.path.join(config.valid.input_dir,
+                                                  "1", "imagese_e_f_r_efr50e00_93212869.tif")
 
-    print(model.predict([np.array([load_file(r"D:\\FinalImages\Train\0\imagesa_a_m_m_amm07c00_CTRSP-FILES013353-33.tif")]), 
-                        np.array([load_file(r"D:\\FinalImages\Train\1\imagesa_a_g_w_agw02a00_1003546746_1003546751.tif")])]))
+    print(model.predict([np.array([Utils.load_file(test_label_file)]),
+                         np.array([Utils.load_file(test_prediction_file_same)])]))
+
+    print(model.predict([np.array([Utils.load_file(test_label_file)]), 
+                        np.array([Utils.load_file(test_prediction_file_different)])]))
+

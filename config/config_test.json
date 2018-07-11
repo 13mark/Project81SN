@@ -1,0 +1,16 @@
+{
+    "input_shape": [224, 224, 3],
+    "train":{
+        "input_dir": "/deep/Tense/Project81SN/data/Train_val",
+        "batch_size": 1,
+        "num_batches": 1
+    },
+    "valid": {
+        "input_dir": "/deep/Tense/Project81SN/data/Valid_val",
+        "batch_size": 1,
+        "num_batches": 1
+    },
+    "num_epochs": 10,
+    "patience": 1,
+    "learning_rate": 1e-3
+}

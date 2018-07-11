@@ -1,0 +1,16 @@
+{
+    "input_shape": [224, 224, 3],
+    "train":{
+        "input_dir": "D://FinalImages//Valid_val",
+        "batch_size": 32,
+        "num_batches": 128
+    },
+    "valid": {
+        "input_dir": "D://FinalImages//Train_val",
+        "batch_size": 32,
+        "num_batches": 128
+    },
+    "num_epochs": 100,
+    "patience": 5,
+    "learning_rate": 1e-3
+}

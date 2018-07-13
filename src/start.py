@@ -31,7 +31,6 @@ with open(config_file, 'r') as f:
 train_dir = config.train.input_dir
 valid_dir = config.valid.input_dir
 model_dir = os.path.join(home, "models", f"models_{time_at_start}")
-os.makedirs(model_dir, exist_ok=True)
 
 input_shape = config.input_shape
 
@@ -43,7 +42,7 @@ class ModelArchitectures:
         prediction_input = Input(input_shape)
 
         base_model = VGG16(include_top=False, weights='imagenet')
-        for layer in base_model.layers[:17]:
+        for layer in base_model.layers[:config.non_trainable_layer_count]:
             layer.trainable = False
         
         encoded_l = base_model(label_input)
@@ -52,6 +51,7 @@ class ModelArchitectures:
         both = subtract([encoded_l, encoded_r])
         both = Lambda(lambda x: abs(x))(both)
         flattened = Flatten()(both)
+        flattened = Dropout(config.dropout)(flattened)
         prediction = Dense(1, activation='sigmoid')(flattened)
         siamese_net = Model(inputs=[label_input, prediction_input], outputs=prediction)
         siamese_net.compile(loss="binary_crossentropy", metrics=["accuracy"],
@@ -95,33 +95,33 @@ class SiameseLoader:
 
 
 class Utils:
-	@staticmethod
-	def load_file(file_name):
-	    if os.path.exists(file_name):
-	        image = cv2.imread(file_name)
-	        image.resize(input_shape)
-	    else:
-	        print("Error")
-	    return image
+    @staticmethod
+    def load_file(file_name):
+        if os.path.exists(file_name):
+            image = cv2.imread(file_name)
+            image.resize(input_shape)
+        else:
+            print("Error")
+        return image
 
-	@staticmethod
-	def create_dataset(input_folder, identifier):
-	    result = defaultdict(dict)
-	    for document_type in os.listdir(input_folder):
-	        print("Loading Document Type: {}".format(document_type))
-	        document_type_path = os.path.join(input_folder, document_type)
-	        for document in os.listdir(document_type_path):
-	            document_path = os.path.join(document_type_path, document)
-	            result[document_type][document] = Utils.load_file(document_path)
+    @staticmethod
+    def create_dataset(input_folder, identifier):
+        result = defaultdict(dict)
+        for document_type in os.listdir(input_folder):
+            print("Loading Document Type: {}".format(document_type))
+            document_type_path = os.path.join(input_folder, document_type)
+            for document in os.listdir(document_type_path):
+                document_path = os.path.join(document_type_path, document)
+                result[document_type][document] = Utils.load_file(document_path)
 
-	    with open(os.path.join(home, "data", f"{identifier}.pickle"), "wb") as f:
-	        pickle.dump(result, f)
+        with open(os.path.join(home, "data", f'{identifier}.pickle'), "wb") as f:
+            pickle.dump(result, f)
 
-	@staticmethod
-	def load_dataset(identifier):
-	    with open(os.path.join(home, "data", f"{identifier}.pickle"), "rb") as f:
-	        result = pickle.load(f)
-	    return result
+    @staticmethod
+    def load_dataset(identifier):
+        with open(os.path.join(home, "data", f"{identifier}.pickle"), "rb") as f:
+            result = pickle.load(f)
+        return result
 
 
 class DataGenerator(keras.utils.Sequence):
@@ -150,9 +150,29 @@ class DataGenerator(keras.utils.Sequence):
 # Utils.create_dataset(train_dir, "train")
 # Utils.create_dataset(valid_dir, "valid")
 
-model = ModelArchitectures.get_model()
+def initialize():
+    K.clear_session()
+    all_models_folders = [
+        os.path.join(home, "models", directory)
+        for directory in os.listdir(os.path.join(home, "models"))
+        if os.path.isdir(os.path.join(home, "models", directory))
+    ]
 
-if True:
+    if len(all_models_folders) == 0:
+        return None
+    
+    last_train_models_folder = max(all_models_folders, key=os.path.getmtime)
+    time_at_start = last_train_models_folder.split('_')[-1]
+
+    model = keras.models.load_model(os.path.join(home, "models", f"models_{time_at_start}", f"model_{time_at_start}.h5"))
+
+    return model
+
+if config.mode == "training":
+    os.makedirs(model_dir, exist_ok=True)
+
+    model = ModelArchitectures.get_model()
+
     train_data = Utils.load_dataset("train")
     valid_data = Utils.load_dataset("valid")
 
@@ -178,7 +198,8 @@ if True:
                         epochs=config.num_epochs,
                         callbacks=callbacks)
 
-else:
+elif config.mode == "prediction":
+    model = initialize()
     test_label_file = os.path.join(config.valid.input_dir,
                                    "0", "imagesb_b_f_b_bfb88e00_2026193480.tif") 
     test_prediction_file_same = os.path.join(config.valid.input_dir,

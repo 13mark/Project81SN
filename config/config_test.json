@@ -12,5 +12,8 @@
     },
     "num_epochs": 10,
     "patience": 1,
-    "learning_rate": 1e-3
+    "dropout": 0.5,
+    "non_trainable_layer_count": 20,
+    "learning_rate": 1e-3,
+    "mode": "prediction"
 }

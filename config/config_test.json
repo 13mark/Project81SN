@@ -1,5 +1,9 @@
 {
-    "input_shape": [224, 224, 3],
+    "model_details":{
+        "input_shape": [299, 299, 3],
+        "model_type": "inceptionV3",
+        "non_trainable_layer_count": 200
+    },
     "train":{
         "input_dir": "/deep/Tense/Project81SN/data/Train_val",
         "batch_size": 1,
@@ -13,7 +17,7 @@
     "num_epochs": 10,
     "patience": 1,
     "dropout": 0.5,
-    "non_trainable_layer_count": 20,
     "learning_rate": 1e-3,
-    "mode": "prediction"
+    "mode": "training",
+    "loghost": "localhost"
 }

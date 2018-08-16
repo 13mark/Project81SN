@@ -1,3 +1,5 @@
+#!/usr/bin/env python
+
 import gc
 import os
 import cv2
@@ -5,6 +7,7 @@ import json
 import keras
 import pickle
 import random
+import logging
 import datetime
 
 import numpy as np 
@@ -12,12 +15,15 @@ import keras.backend as K
 
 from collections import defaultdict, namedtuple
 from keras.applications.vgg16 import VGG16
-from keras.layers import Input, Dense, Flatten, subtract, Lambda
+from keras.applications.vgg19 import VGG19
+from keras.applications.inception_v3 import InceptionV3
+from keras.applications.inception_resnet_v2 import InceptionResNetV2
+from keras.layers import Input, Dense, Flatten, subtract, Lambda, Dropout
 from keras.optimizers import Adam
 from keras.models import Model
-from keras.callbacks import EarlyStopping, ModelCheckpoint
+from keras.callbacks import EarlyStopping, ModelCheckpoint, TensorBoard
 
-# TODO: Start prediction Module with ImageNet Weights
+from custom_callbacks import LogEpochStatistics
 
 home = os.path.dirname(os.getcwd())
 time_at_start = datetime.datetime.now().strftime("%Y-%m-%d--%H-%M-%S")
@@ -27,12 +33,38 @@ config_file = os.path.join(home, "config", "config_test.json")
 with open(config_file, 'r') as f:
     config = json.load(f, object_hook=lambda d: namedtuple('X', d.keys())(*d.values()))
 
-
 train_dir = config.train.input_dir
 valid_dir = config.valid.input_dir
 model_dir = os.path.join(home, "models", f"models_{time_at_start}")
+tensorboard_dir = os.path.join(home, "analysis", "tensorboard", f"tensorboard_logs_{time_at_start}")
+model_type = config.model_details.model_type
 
-input_shape = config.input_shape
+log_file = os.path.join(home, "logs", f"log_{time_at_start}.log")
+log_format = '[%(asctime)s]\t[%(levelname)s]\t[%(filename)s]\t[%(funcName)s]\t%(message)s'
+
+logging.basicConfig(filename=log_file, level=logging.DEBUG, format=log_format)
+status_logger = logging.getLogger("Status")
+
+model_dictionary = {
+    "vgg16": {
+        "model": VGG16,
+        "input_shape": [224, 224, 3]
+    },
+    "vgg19": {
+        "model": VGG19,
+        "input_shape": [224, 224, 3]
+    },
+    "inceptionV3": {
+        "model": InceptionV3,
+        "input_shape": [299, 299, 3]
+    },
+    "inception_resnetV2": {
+        "model": InceptionResNetV2,
+        "input_shape": [299, 299, 3]
+    }
+}
+
+input_shape = model_dictionary[model_type]["input_shape"]
 
 
 class ModelArchitectures:
@@ -41,8 +73,8 @@ class ModelArchitectures:
         label_input = Input(input_shape)
         prediction_input = Input(input_shape)
 
-        base_model = VGG16(include_top=False, weights='imagenet')
-        for layer in base_model.layers[:config.non_trainable_layer_count]:
+        base_model = model_dictionary[model_type]["model"](include_top=False, weights='imagenet')
+        for layer in base_model.layers[:config.model_details.non_trainable_layer_count]:
             layer.trainable = False
         
         encoded_l = base_model(label_input)
@@ -96,30 +128,34 @@ class SiameseLoader:
 
 class Utils:
     @staticmethod
-    def load_file(file_name):
+    def load_file(file_name, input_shape):
         if os.path.exists(file_name):
             image = cv2.imread(file_name)
             image.resize(input_shape)
-        else:
-            print("Error")
-        return image
+            return image
+        print("Error")
 
     @staticmethod
-    def create_dataset(input_folder, identifier):
+    def create_dataset(input_folder, identifier, input_shape):
         result = defaultdict(dict)
         for document_type in os.listdir(input_folder):
             print("Loading Document Type: {}".format(document_type))
             document_type_path = os.path.join(input_folder, document_type)
             for document in os.listdir(document_type_path):
                 document_path = os.path.join(document_type_path, document)
-                result[document_type][document] = Utils.load_file(document_path)
+                result[document_type][document] = Utils.load_file(document_path, input_shape)
 
-        with open(os.path.join(home, "data", f'{identifier}.pickle'), "wb") as f:
+        with open(os.path.join(home, "data",
+                               f'{identifier}_{input_shape[0]}x{input_shape[1]}x{input_shape[2]}.pickle'), "wb") as f:
             pickle.dump(result, f)
 
     @staticmethod
-    def load_dataset(identifier):
-        with open(os.path.join(home, "data", f"{identifier}.pickle"), "rb") as f:
+    def load_dataset(identifier, input_shape):
+        input_file = os.path.join(home, "data",
+                                  f"{identifier}_{input_shape[0]}x{input_shape[1]}x{input_shape[2]}.pickle")
+        if not os.path.exists(input_file):
+            return None
+        with open(input_file, "rb") as f:
             result = pickle.load(f)
         return result
 
@@ -147,9 +183,6 @@ class DataGenerator(keras.utils.Sequence):
         pass
 
 
-# Utils.create_dataset(train_dir, "train")
-# Utils.create_dataset(valid_dir, "valid")
-
 def initialize():
     K.clear_session()
     all_models_folders = [
@@ -164,17 +197,27 @@ def initialize():
     last_train_models_folder = max(all_models_folders, key=os.path.getmtime)
     time_at_start = last_train_models_folder.split('_')[-1]
 
-    model = keras.models.load_model(os.path.join(home, "models", f"models_{time_at_start}", f"model_{time_at_start}.h5"))
+    model = keras.models.load_model(os.path.join(home, "models",
+                                                 f"models_{time_at_start}", f"model_{time_at_start}.h5"))
 
     return model
 
+
 if config.mode == "training":
     os.makedirs(model_dir, exist_ok=True)
+    os.makedirs(tensorboard_dir, exist_ok=True)
 
     model = ModelArchitectures.get_model()
 
-    train_data = Utils.load_dataset("train")
-    valid_data = Utils.load_dataset("valid")
+    train_data = Utils.load_dataset("train", input_shape)
+    if train_data is None:
+        Utils.create_dataset(train_dir, "train", input_shape)
+        train_data = Utils.load_dataset("train", input_shape)
+
+    valid_data = Utils.load_dataset("valid", input_shape)
+    if valid_data is None:
+        Utils.create_dataset(valid_dir, "valid", input_shape)
+        valid_data = Utils.load_dataset("valid", input_shape)
 
     train_generator = DataGenerator(train_data, 
                                     batch_size=config.train.batch_size, 
@@ -187,11 +230,12 @@ if config.mode == "training":
 
     gc.collect(2)
 
-    # model.fit_generator(generator=train_generator, epochs=10)
     callbacks = [
         EarlyStopping(patience=config.patience, monitor='val_loss', verbose=1),
         ModelCheckpoint(os.path.join(model_dir, f"model_{time_at_start}.h5"), 
-                        save_best_only=True, period=1)
+                        save_best_only=True, period=1),
+        TensorBoard(log_dir=tensorboard_dir, write_graph=True, write_grads=None, write_images=False),
+        LogEpochStatistics(status_logger)
     ]
     model.fit_generator(generator=train_generator, 
                         validation_data=valid_generator, 
@@ -207,9 +251,9 @@ elif config.mode == "prediction":
     test_prediction_file_different = os.path.join(config.valid.input_dir,
                                                   "1", "imagese_e_f_r_efr50e00_93212869.tif")
 
-    print(model.predict([np.array([Utils.load_file(test_label_file)]),
-                         np.array([Utils.load_file(test_prediction_file_same)])]))
+    print(model.predict([np.array([Utils.load_file(test_label_file, input_shape)]),
+                         np.array([Utils.load_file(test_prediction_file_same, input_shape)])]))
 
-    print(model.predict([np.array([Utils.load_file(test_label_file)]), 
-                        np.array([Utils.load_file(test_prediction_file_different)])]))
+    print(model.predict([np.array([Utils.load_file(test_label_file, input_shape)]),
+                        np.array([Utils.load_file(test_prediction_file_different, input_shape)])]))
 

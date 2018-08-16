@@ -108,3 +108,9 @@ data/*
 
 models/*
 !models/.gitkeep
+
+logs/*
+!logs/.gitkeep
+
+analysis/*
+!analysis/.gitkeep

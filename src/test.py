@@ -1,9 +1,12 @@
-import random
+import os
+import logging
 
-A = [1, 2, 3, 4]
+home = os.path.dirname(os.getcwd())
 
-def tre():
-    yield random.choice(A)
+log_file = os.path.join(home, "logs", f"log.log")
+log_format = '[%(asctime)s]\t[%(levelname)s]\t[%(filename)s]\t[%(funcName)s]\t%(message)s'
 
-print(next(tre()))
-print(next(tre()))
+logging.basicConfig(filename=log_file, level=logging.DEBUG, format=log_format)
+status_logger = logging.getLogger("Status")
+
+status_logger.info("Were")

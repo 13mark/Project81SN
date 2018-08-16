@@ -1,5 +1,9 @@
 {
-    "input_shape": [224, 224, 3],
+    "model_details":{
+        "input_shape": [224, 224, 3],
+        "model_type": "vgg16",
+        "non_trainable_layer_count": 17
+    },
     "train":{
         "input_dir": "D://FinalImages//Valid_val",
         "batch_size": 32,
@@ -12,8 +16,8 @@
     },
     "num_epochs": 100,
     "patience": 5,
-    "non_trainable_layer_count": 17,
     "dropout": 0.5,
     "learning_rate": 1e-4,
-    "mode": "prediction"
+    "mode": "prediction",
+    "loghost": "localhost"
 }
